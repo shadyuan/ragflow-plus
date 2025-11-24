@@ -79,7 +79,7 @@ app.json_encoder = CustomJSONEncoder
 app.errorhandler(Exception)(server_error_response)
 
 ## convince for dev and debug
-# app.config["LOGIN_DISABLED"] = True
+app.config["LOGIN_DISABLED"] = True  # 禁用登录验证
 app.config["SESSION_PERMANENT"] = False
 app.config["SESSION_TYPE"] = "filesystem"
 app.config["MAX_CONTENT_LENGTH"] = int(
@@ -87,8 +87,9 @@ app.config["MAX_CONTENT_LENGTH"] = int(
 )
 
 Session(app)
-login_manager = LoginManager()
-login_manager.init_app(app)
+# 注释掉LoginManager相关代码，禁用用户认证
+# login_manager = LoginManager()
+# login_manager.init_app(app)
 
 commands.register_commands(app)
 
@@ -137,38 +138,6 @@ pages_dir = [
 client_urls_prefix = [
     register_page(path) for dir in pages_dir for path in search_pages_path(dir)
 ]
-
-
-@login_manager.request_loader
-def load_user(web_request):
-    jwt = Serializer(secret_key=settings.SECRET_KEY)
-    authorization = web_request.headers.get("Authorization")
-    print(f"[DEBUG] load_user called - Authorization header: {authorization}")
-    
-    if authorization:
-        try:
-            print(f"[DEBUG] Attempting to deserialize token...")
-            access_token = str(jwt.loads(authorization))
-            print(f"[DEBUG] Deserialized access_token: {access_token}")
-            
-            user = UserService.query(
-                access_token=access_token, status=StatusEnum.VALID.value
-            )
-            print(f"[DEBUG] User query result: {user}")
-            
-            if user:
-                print(f"[DEBUG] User found: {user[0].email}")
-                return user[0]
-            else:
-                print(f"[DEBUG] No user found for access_token: {access_token}")
-                return None
-        except Exception as e:
-            print(f"[DEBUG] load_user exception: {e}")
-            logging.warning(f"load_user got exception {e}")
-            return None
-    else:
-        print(f"[DEBUG] No Authorization header found")
-        return None
 
 
 @app.teardown_request

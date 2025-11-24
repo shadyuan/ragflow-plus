@@ -21,7 +21,7 @@ from dashscope import Generation
 from abc import ABC
 from openai import OpenAI
 import openai
-from ollama import Client
+
 from rag.nlp import is_chinese, is_english
 from rag.utils import num_tokens_from_string
 import os
@@ -131,32 +131,7 @@ class MoonshotChat(Base):
         super().__init__(key, model_name, base_url)
 
 
-class XinferenceChat(Base):
-    def __init__(self, key=None, model_name="", base_url=""):
-        if not base_url:
-            raise ValueError("Local llm url cannot be None")
-        if base_url.split("/")[-1] != "v1":
-            base_url = os.path.join(base_url, "v1")
-        super().__init__(key, model_name, base_url)
 
-
-class HuggingFaceChat(Base):
-    def __init__(self, key=None, model_name="", base_url=""):
-        if not base_url:
-            raise ValueError("Local llm url cannot be None")
-        if base_url.split("/")[-1] != "v1":
-            base_url = os.path.join(base_url, "v1")
-        super().__init__(key, model_name.split("___")[0], base_url)
-
-
-class ModelScopeChat(Base):
-    def __init__(self, key=None, model_name="", base_url=""):
-        if not base_url:
-            raise ValueError("Local llm url cannot be None")
-        base_url = base_url.rstrip('/')
-        if base_url.split("/")[-1] != "v1":
-            base_url = os.path.join(base_url, "v1")
-        super().__init__(key, model_name.split("___")[0], base_url)
 
 
 class DeepSeekChat(Base):
@@ -430,155 +405,7 @@ class ZhipuChat(Base):
         yield tk_count
 
 
-class OllamaChat(Base):
-    def __init__(self, key, model_name, **kwargs):
-        self.client = Client(host=kwargs["base_url"])
-        self.model_name = model_name
 
-    def chat(self, system, history, gen_conf):
-        if system:
-            history.insert(0, {"role": "system", "content": system})
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
-        try:
-            options = {}
-            if "temperature" in gen_conf:
-                options["temperature"] = gen_conf["temperature"]
-            if "max_tokens" in gen_conf:
-                options["num_predict"] = gen_conf["max_tokens"]
-            if "top_p" in gen_conf:
-                options["top_p"] = gen_conf["top_p"]
-            if "presence_penalty" in gen_conf:
-                options["presence_penalty"] = gen_conf["presence_penalty"]
-            if "frequency_penalty" in gen_conf:
-                options["frequency_penalty"] = gen_conf["frequency_penalty"]
-            response = self.client.chat(
-                model=self.model_name,
-                messages=history,
-                options=options,
-                keep_alive=-1
-            )
-            ans = response["message"]["content"].strip()
-            return ans, response.get("eval_count", 0) + response.get("prompt_eval_count", 0)
-        except Exception as e:
-            return "**ERROR**: " + str(e), 0
-
-    def chat_streamly(self, system, history, gen_conf):
-        if system:
-            history.insert(0, {"role": "system", "content": system})
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
-        options = {}
-        if "temperature" in gen_conf:
-            options["temperature"] = gen_conf["temperature"]
-        if "max_tokens" in gen_conf:
-            options["num_predict"] = gen_conf["max_tokens"]
-        if "top_p" in gen_conf:
-            options["top_p"] = gen_conf["top_p"]
-        if "presence_penalty" in gen_conf:
-            options["presence_penalty"] = gen_conf["presence_penalty"]
-        if "frequency_penalty" in gen_conf:
-            options["frequency_penalty"] = gen_conf["frequency_penalty"]
-        ans = ""
-        try:
-            response = self.client.chat(
-                model=self.model_name,
-                messages=history,
-                stream=True,
-                options=options,
-                keep_alive=-1
-            )
-            for resp in response:
-                if resp["done"]:
-                    yield resp.get("prompt_eval_count", 0) + resp.get("eval_count", 0)
-                ans += resp["message"]["content"]
-                yield ans
-        except Exception as e:
-            yield ans + "\n**ERROR**: " + str(e)
-        yield 0
-
-
-class LocalAIChat(Base):
-    def __init__(self, key, model_name, base_url):
-        if not base_url:
-            raise ValueError("Local llm url cannot be None")
-        if base_url.split("/")[-1] != "v1":
-            base_url = os.path.join(base_url, "v1")
-        self.client = OpenAI(api_key="empty", base_url=base_url)
-        self.model_name = model_name.split("___")[0]
-
-
-class LocalLLM(Base):
-    class RPCProxy:
-        def __init__(self, host, port):
-            self.host = host
-            self.port = int(port)
-            self.__conn()
-
-        def __conn(self):
-            from multiprocessing.connection import Client
-
-            self._connection = Client(
-                (self.host, self.port), authkey=b"infiniflow-token4kevinhu"
-            )
-
-        def __getattr__(self, name):
-            import pickle
-
-            def do_rpc(*args, **kwargs):
-                for _ in range(3):
-                    try:
-                        self._connection.send(pickle.dumps((name, args, kwargs)))
-                        return pickle.loads(self._connection.recv())
-                    except Exception:
-                        self.__conn()
-                raise Exception("RPC connection lost!")
-
-            return do_rpc
-
-    def __init__(self, key, model_name):
-        from jina import Client
-
-        self.client = Client(port=12345, protocol="grpc", asyncio=True)
-
-    def _prepare_prompt(self, system, history, gen_conf):
-        from rag.svr.jina_server import Prompt
-        if system:
-            history.insert(0, {"role": "system", "content": system})
-        return Prompt(message=history, gen_conf=gen_conf)
-
-    def _stream_response(self, endpoint, prompt):
-        from rag.svr.jina_server import Generation
-        answer = ""
-        try:
-            res = self.client.stream_doc(
-                on=endpoint, inputs=prompt, return_type=Generation
-            )
-            loop = asyncio.get_event_loop()
-            try:
-                while True:
-                    answer = loop.run_until_complete(res.__anext__()).text
-                    yield answer
-            except StopAsyncIteration:
-                pass
-        except Exception as e:
-            yield answer + "\n**ERROR**: " + str(e)
-        yield num_tokens_from_string(answer)
-
-    def chat(self, system, history, gen_conf):
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
-        prompt = self._prepare_prompt(system, history, gen_conf)
-        chat_gen = self._stream_response("/chat", prompt)
-        ans = next(chat_gen)
-        total_tokens = next(chat_gen)
-        return ans, total_tokens
-
-    def chat_streamly(self, system, history, gen_conf):
-        if "max_tokens" in gen_conf:
-            del gen_conf["max_tokens"]
-        prompt = self._prepare_prompt(system, history, gen_conf)
-        return self._stream_response("/stream", prompt)
 
 
 class VolcEngineChat(Base):
@@ -974,15 +801,6 @@ class NvidiaChat(Base):
             base_url = "https://integrate.api.nvidia.com/v1"
         super().__init__(key, model_name, base_url)
 
-
-class LmStudioChat(Base):
-    def __init__(self, key, model_name, base_url):
-        if not base_url:
-            raise ValueError("Local llm url cannot be None")
-        if base_url.split("/")[-1] != "v1":
-            base_url = os.path.join(base_url, "v1")
-        self.client = OpenAI(api_key="lm-studio", base_url=base_url)
-        self.model_name = model_name
 
 
 class OpenAI_APIChat(Base):
