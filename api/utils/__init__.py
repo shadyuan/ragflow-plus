@@ -81,8 +81,25 @@ def show_configs():
 
 
 def get_base_config(key, default=None):
+    """
+    从Nacos获取配置，如果Nacos中没有配置则返回本地配置或环境变量
+    """
     if key is None:
         return None
+    
+    # 尝试从Nacos获取配置
+    try:
+        from api.nacos_config import get_nacos_config_manager
+        nacos_manager = get_nacos_config_manager()
+        # 尝试获取服务配置
+        config_data = nacos_manager.get_yaml_config(data_id="ragflow-service.yaml", group="DEFAULT_GROUP")
+        
+        if config_data and key in config_data:
+            return config_data[key]
+    except Exception as e:
+        logging.warning(f"Failed to get config from Nacos: {e}")
+    
+    # 如果Nacos中没有配置，则从本地配置文件或环境变量获取
     if default is None:
         default = os.environ.get(key.upper())
     return CONFIGS.get(key, default)
